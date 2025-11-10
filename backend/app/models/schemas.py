@@ -33,6 +33,18 @@ class TripRequest(BaseModel):
         }
 
 
+class VoiceFormSuggestion(BaseModel):
+    """语音表单建议"""
+    city: Optional[str] = Field(default=None, description="目的地城市")
+    start_date: Optional[str] = Field(default=None, description="开始日期 YYYY-MM-DD")
+    end_date: Optional[str] = Field(default=None, description="结束日期 YYYY-MM-DD")
+    travel_days: Optional[int] = Field(default=None, description="旅行天数")
+    transportation: Optional[str] = Field(default=None, description="交通方式")
+    accommodation: Optional[str] = Field(default=None, description="住宿偏好")
+    preferences: List[str] = Field(default_factory=list, description="旅行偏好")
+    free_text_input: Optional[str] = Field(default=None, description="补充需求")
+
+
 class POISearchRequest(BaseModel):
     """POI搜索请求"""
     keywords: str = Field(..., description="搜索关键词", example="故宫")
@@ -155,6 +167,25 @@ class TripPlanResponse(BaseModel):
     success: bool = Field(..., description="是否成功")
     message: str = Field(default="", description="消息")
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    """语音识别响应"""
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(default="", description="消息说明")
+    transcript: Optional[str] = Field(default=None, description="识别文本")
+    form: VoiceFormSuggestion = Field(default_factory=VoiceFormSuggestion, description="表单建议")
+    missing_fields: List[str] = Field(default_factory=list, description="缺失字段列表")
+
+
+class VoicePlanResponse(BaseModel):
+    """语音直接生成行程响应"""
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(default="", description="消息说明")
+    transcript: Optional[str] = Field(default=None, description="识别文本")
+    form: VoiceFormSuggestion = Field(default_factory=VoiceFormSuggestion, description="表单建议")
+    missing_fields: List[str] = Field(default_factory=list, description="缺失字段列表")
+    data: Optional[TripPlan] = Field(default=None, description="旅行计划")
 
 
 class POIInfo(BaseModel):

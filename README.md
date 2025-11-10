@@ -9,6 +9,7 @@
 - 🧠 **智能工具调用**: Agent自动调用高德地图MCP工具,获取实时POI、路线和天气信息
 - 🎨 **现代化前端**: Vue3 + TypeScript + Vite,响应式设计,流畅的用户体验
 - 📱 **完整功能**: 包含住宿、交通、餐饮和景点游览时间推荐
+- 🎙️ **语音输入**: 集成科大讯飞语音听写,一键录音即可自动填表或直接生成行程
 
 ## 🏗️ 技术栈
 
@@ -66,6 +67,7 @@ ai-travel-planner/
 - Node.js 16+
 - 高德地图API密钥 (Web服务API)
 - LLM API密钥 (OpenAI/DeepSeek等)
+- 科大讯飞开放平台语音听写 AppID / API Key / API Secret
 
 ### 后端安装
 
@@ -121,6 +123,21 @@ npm run dev
 
 5. 打开浏览器访问 `http://localhost:5173`
 
+### 科大讯飞语音配置
+
+1. 在[科大讯飞开放平台](https://www.xfyun.cn/)启用“语音听写 WebAPI (v2)”能力,获取 `AppID / APIKey / APISecret`。
+2. 编辑 `backend/.env`, 增加以下配置:
+   ```ini
+   IFLYTEK_APP_ID=your_app_id
+   IFLYTEK_API_KEY=your_api_key
+   IFLYTEK_API_SECRET=your_api_secret
+   IFLYTEK_LANGUAGE=zh_cn
+   IFLYTEK_DOMAIN=iat
+   IFLYTEK_ACCENT=mandarin
+   ```
+3. 重新执行 `pip install -r backend/requirements.txt`, 确认新引入的 `websockets` 等依赖安装完成。
+4. 前端已内置 Web Audio 录音与 16k PCM 转码逻辑,直接使用首页的“语音快速输入”按钮即可触发识别与自动填表。
+
 ## 📝 使用指南
 
 1. 在首页填写旅行信息:
@@ -144,6 +161,13 @@ npm run dev
    - 交通路线规划
    - 天气预报
    - 餐饮推荐
+
+### 🎙️ 语音输入玩法
+
+1. 点击首页的“语音快速输入”按钮,授予浏览器麦克风权限并描述: 目的地、出行日期/天数、预算、同行人数、旅行偏好等内容。
+2. 松开录音后,系统会调用科大讯飞语音听写接口获取文本,并利用 LLM 抽取表单字段,自动标注缺失项。
+3. 可选择“使用语音填充表单”快速带入识别结果,也可以直接点击“语音直接生成行程”一步到位。
+4. 所有语音表单都会保存原文本,便于用户二次编辑或加入额外需求。
 
 ## 🔧 核心实现
 
@@ -190,6 +214,8 @@ Agent可以自动调用以下高德地图MCP工具:
 - `GET /api/map/poi` - 搜索POI
 - `GET /api/map/weather` - 查询天气
 - `POST /api/map/route` - 规划路线
+- `POST /api/voice/transcribe` - 上传语音并返回识别文本+表单建议
+- `POST /api/voice/plan` - 上传语音并直接生成完整旅行计划
 
 ## 🤝 贡献指南
 

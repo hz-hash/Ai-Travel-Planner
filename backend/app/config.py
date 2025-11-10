@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4"
 
+    # 科大讯飞语音听写配置
+    iflytek_app_id: str = ""
+    iflytek_api_key: str = ""
+    iflytek_api_secret: str = ""
+    iflytek_host: str = "iat-api.xfyun.cn"
+    iflytek_path: str = "/v2/iat"
+    iflytek_language: str = "zh_cn"
+    iflytek_domain: str = "iat"
+    iflytek_accent: str = "mandarin"
+
     # 日志配置
     log_level: str = "INFO"
 
@@ -79,6 +89,9 @@ def validate_config():
     if not llm_api_key:
         warnings.append("LLM_API_KEY或OPENAI_API_KEY未配置,LLM功能可能无法使用")
 
+    if not (settings.iflytek_app_id and settings.iflytek_api_key and settings.iflytek_api_secret):
+        warnings.append("IFLYTEK_APP_ID/API_KEY/API_SECRET未配置,语音输入功能不可用")
+
     if errors:
         error_msg = "配置错误:\n" + "\n".join(f"  - {e}" for e in errors)
         raise ValueError(error_msg)
@@ -107,5 +120,7 @@ def print_config():
     print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
     print(f"LLM Base URL: {llm_base_url}")
     print(f"LLM Model: {llm_model}")
+    has_voice = all([settings.iflytek_app_id, settings.iflytek_api_key, settings.iflytek_api_secret])
+    print(f"语音识别: {'已启用' if has_voice else '未配置'}")
     print(f"日志级别: {settings.log_level}")
 

@@ -22,6 +22,133 @@
         layout="vertical"
         @finish="handleSubmit"
       >
+        <!-- 语音输入 -->
+        <div class="form-section voice-section">
+          <div class="section-header">
+            <span class="section-icon">🎙️</span>
+            <span class="section-title">语音快速输入</span>
+          </div>
+
+          <p class="voice-hint">
+            {{ voiceState.statusText }}
+          </p>
+
+          <div class="voice-actions">
+            <a-button
+              type="primary"
+              size="large"
+              :danger="voiceState.recording"
+              :loading="voiceState.recording"
+              @click="toggleVoiceRecording"
+            >
+              <template #icon>
+                <span v-if="voiceState.recording">⏹</span>
+                <span v-else>🎙️</span>
+              </template>
+              {{ voiceState.recording ? '停止录音' : '开始语音输入' }}
+            </a-button>
+            <a-button
+              size="large"
+              :disabled="!voiceState.suggestion || voiceState.uploading"
+              @click="applyVoiceSuggestion"
+            >
+              <template #icon>🪄</template>
+              使用语音填充表单
+            </a-button>
+            <a-button
+              size="large"
+              type="dashed"
+              :disabled="!canGenerateFromVoice || voiceState.planning"
+              @click="generatePlanFromVoice"
+            >
+              <template #icon>⚡</template>
+              语音直接生成行程
+            </a-button>
+          </div>
+
+          <a-alert
+            v-if="!voiceState.supported"
+            type="warning"
+            message="浏览器暂不支持录音,建议使用最新版 Chrome/Edge"
+            show-icon
+            class="voice-alert"
+          />
+          <a-alert
+            v-else-if="voiceState.error"
+            type="error"
+            :message="voiceState.error"
+            show-icon
+            closable
+            class="voice-alert"
+            @close="voiceState.error = ''"
+          />
+
+          <div class="voice-status" v-if="voiceState.uploading || voiceState.planning">
+            <a-spin
+              :tip="voiceState.uploading ? '语音识别中...' : 'AI 正在根据语音生成行程...'"
+            />
+          </div>
+
+          <div v-if="voiceState.transcript" class="voice-result-card">
+            <h4>识别文本</h4>
+            <p class="voice-transcript">{{ voiceState.transcript }}</p>
+
+            <div class="missing-fields" v-if="voiceState.missing.length">
+              <span>仍需补充:</span>
+              <a-tag
+                v-for="field in voiceState.missing"
+                :key="field"
+                color="volcano"
+              >
+                {{ field }}
+              </a-tag>
+            </div>
+
+            <div class="voice-suggestion-grid" v-if="voiceState.suggestion">
+              <div class="voice-suggestion-item">
+                <span class="label">目的地</span>
+                <span class="value">{{ voiceState.suggestion?.city || '未识别' }}</span>
+              </div>
+              <div class="voice-suggestion-item">
+                <span class="label">开始日期</span>
+                <span class="value">{{ voiceState.suggestion?.start_date || '-' }}</span>
+              </div>
+              <div class="voice-suggestion-item">
+                <span class="label">结束日期</span>
+                <span class="value">{{ voiceState.suggestion?.end_date || '-' }}</span>
+              </div>
+              <div class="voice-suggestion-item">
+                <span class="label">旅行天数</span>
+                <span class="value">{{ voiceState.suggestion?.travel_days || '-' }}</span>
+              </div>
+              <div class="voice-suggestion-item">
+                <span class="label">交通方式</span>
+                <span class="value">{{ voiceState.suggestion?.transportation || '默认' }}</span>
+              </div>
+              <div class="voice-suggestion-item">
+                <span class="label">住宿偏好</span>
+                <span class="value">{{ voiceState.suggestion?.accommodation || '默认' }}</span>
+              </div>
+            </div>
+
+            <div
+              class="voice-preferences"
+              v-if="voiceState.suggestion?.preferences && voiceState.suggestion.preferences.length"
+            >
+              <span class="label">偏好:</span>
+              <div class="preference-tags-inline">
+                <a-tag
+                  v-for="tag in voiceState.suggestion.preferences"
+                  :key="tag"
+                  color="geekblue"
+                >
+                  {{ tag }}
+                </a-tag>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 第一步:目的地和日期 -->
         <div class="form-section">
           <div class="section-header">
@@ -204,19 +331,46 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, computed, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { generateTripPlan } from '@/services/api'
-import type { TripFormData } from '@/types'
-import type { Dayjs } from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
+import { generateTripPlan, planTripByVoice, transcribeVoiceInput } from '@/services/api'
+import { VoiceRecorder } from '@/services/voiceRecorder'
+import type { TripFormData, VoiceFormSuggestion } from '@/types'
 
 const router = useRouter()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
 
-const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: Dayjs | null }>({
+const defaultVoiceHint =
+  '点击开始语音输入,描述目的地、日期、预算、同行人数与偏好,系统会自动填表并生成行程'
+
+const voiceRecorder = ref<VoiceRecorder | null>(null)
+const lastVoiceBlob = ref<Blob | null>(null)
+const voiceState = reactive({
+  supported: typeof window !== 'undefined' && !!navigator?.mediaDevices,
+  recording: false,
+  uploading: false,
+  planning: false,
+  transcript: '',
+  statusText: defaultVoiceHint,
+  error: '',
+  missing: [] as string[],
+  suggestion: null as VoiceFormSuggestion | null
+})
+
+const canGenerateFromVoice = computed(
+  () => !!lastVoiceBlob.value && !voiceState.recording && !voiceState.uploading && voiceState.supported
+)
+
+type TripFormState = Omit<TripFormData, 'start_date' | 'end_date'> & {
+  start_date: Dayjs | null
+  end_date: Dayjs | null
+}
+
+const formData = reactive<TripFormState>({
   city: '',
   start_date: null,
   end_date: null,
@@ -243,9 +397,129 @@ watch([() => formData.start_date, () => formData.end_date], ([start, end]) => {
   }
 })
 
+const toggleVoiceRecording = async () => {
+  if (!voiceState.supported) {
+    message.error('当前浏览器不支持语音录制,请改用最新版 Chrome/Edge')
+    return
+  }
+  if (voiceState.recording) {
+    await finishVoiceRecording()
+  } else {
+    await startVoiceRecording()
+  }
+}
+
+const startVoiceRecording = async () => {
+  try {
+    voiceState.error = ''
+    voiceState.statusText = '正在初始化麦克风...'
+    voiceRecorder.value = new VoiceRecorder()
+    await voiceRecorder.value.start()
+    voiceState.recording = true
+    voiceState.statusText = '🎙️ 正在录音,请描述目的地、日期、预算与偏好'
+  } catch (error: any) {
+    voiceState.error = error?.message || '无法访问麦克风,请检查权限'
+    voiceState.statusText = defaultVoiceHint
+    voiceRecorder.value?.dispose()
+    voiceRecorder.value = null
+    message.error(voiceState.error)
+  }
+}
+
+const finishVoiceRecording = async () => {
+  if (!voiceRecorder.value) return
+  try {
+    voiceState.statusText = '正在封装音频...'
+    const blob = await voiceRecorder.value.stop()
+    lastVoiceBlob.value = blob
+    await analyzeVoiceBlob(blob)
+  } catch (error: any) {
+    voiceState.error = error?.message || '处理录音失败,请重试'
+    message.error(voiceState.error)
+  } finally {
+    voiceState.recording = false
+    voiceRecorder.value?.dispose()
+    voiceRecorder.value = null
+  }
+}
+
+const analyzeVoiceBlob = async (blob: Blob) => {
+  voiceState.uploading = true
+  voiceState.statusText = '⏳ 正在上传并识别语音...'
+  try {
+    const result = await transcribeVoiceInput(blob)
+    voiceState.transcript = result.transcript || ''
+    voiceState.suggestion = result.form
+    voiceState.missing = result.missing_fields || []
+    voiceState.statusText =
+      voiceState.missing.length > 0
+        ? '语音识别成功,请补充缺失字段后提交'
+        : '语音识别成功,可一键填充表单'
+    message.success(result.message || '语音解析成功')
+  } catch (error: any) {
+    voiceState.error = error?.message || '语音解析失败,请稍后重试'
+    voiceState.statusText = defaultVoiceHint
+    message.error(voiceState.error)
+  } finally {
+    voiceState.uploading = false
+  }
+}
+
+const applyVoiceSuggestion = () => {
+  if (!voiceState.suggestion) {
+    message.warning('请先完成语音识别')
+    return
+  }
+  const suggestion = voiceState.suggestion
+  if (suggestion.city) formData.city = suggestion.city
+  if (suggestion.start_date) formData.start_date = dayjs(suggestion.start_date)
+  if (suggestion.end_date) formData.end_date = dayjs(suggestion.end_date)
+  if (suggestion.travel_days) formData.travel_days = suggestion.travel_days
+  if (suggestion.transportation) formData.transportation = suggestion.transportation
+  if (suggestion.accommodation) formData.accommodation = suggestion.accommodation
+  if (suggestion.preferences && suggestion.preferences.length > 0) {
+    formData.preferences = [...suggestion.preferences]
+  }
+  if (suggestion.free_text_input) {
+    formData.free_text_input = suggestion.free_text_input
+  }
+  message.success('已根据语音结果填充表单,可继续微调后生成行程')
+}
+
+const generatePlanFromVoice = async () => {
+  if (!lastVoiceBlob.value) {
+    message.warning('请先完成语音录制并识别')
+    return
+  }
+  voiceState.planning = true
+  voiceState.error = ''
+  voiceState.statusText = '🤖 AI 正在根据语音自动生成行程...'
+  try {
+    const result = await planTripByVoice(lastVoiceBlob.value)
+    if (result.success && result.data) {
+      voiceState.transcript = result.transcript || voiceState.transcript
+      voiceState.suggestion = result.form
+      voiceState.missing = result.missing_fields || []
+      sessionStorage.setItem('tripPlan', JSON.stringify(result.data))
+      message.success('语音行程生成成功!')
+      router.push('/result')
+    } else {
+      throw new Error(result.message || '语音行程生成失败')
+    }
+  } catch (error: any) {
+    voiceState.error = error?.message || '语音行程生成失败,请补充信息后重试'
+    message.error(voiceState.error)
+  } finally {
+    voiceState.planning = false
+    voiceState.statusText = defaultVoiceHint
+  }
+}
+
 const handleSubmit = async () => {
-  if (!formData.start_date || !formData.end_date) {
-    message.error('请选择日期')
+  const startDate = formData.start_date
+  const endDate = formData.end_date
+  if (!startDate || !endDate) {
+    message.error('请选择完整的开始与结束日期')
     return
   }
 
@@ -253,12 +527,9 @@ const handleSubmit = async () => {
   loadingProgress.value = 0
   loadingStatus.value = '正在初始化...'
 
-  // 模拟进度更新
   const progressInterval = setInterval(() => {
     if (loadingProgress.value < 90) {
       loadingProgress.value += 10
-
-      // 更新状态文本
       if (loadingProgress.value <= 30) {
         loadingStatus.value = '🔍 正在搜索景点...'
       } else if (loadingProgress.value <= 50) {
@@ -274,8 +545,8 @@ const handleSubmit = async () => {
   try {
     const requestData: TripFormData = {
       city: formData.city,
-      start_date: formData.start_date.format('YYYY-MM-DD'),
-      end_date: formData.end_date.format('YYYY-MM-DD'),
+      start_date: startDate.format('YYYY-MM-DD'),
+      end_date: endDate.format('YYYY-MM-DD'),
       travel_days: formData.travel_days,
       transportation: formData.transportation,
       accommodation: formData.accommodation,
@@ -290,17 +561,13 @@ const handleSubmit = async () => {
     loadingStatus.value = '✅ 完成!'
 
     if (response.success && response.data) {
-      // 保存到sessionStorage
       sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
-
       message.success('旅行计划生成成功!')
-
-      // 短暂延迟后跳转
       setTimeout(() => {
         router.push('/result')
       }, 500)
     } else {
-      message.error(response.message || '生成失败')
+      message.error(response.message || '生成失败,请稍后重试')
     }
   } catch (error: any) {
     clearInterval(progressInterval)
@@ -313,7 +580,12 @@ const handleSubmit = async () => {
     }, 1000)
   }
 }
+
+onBeforeUnmount(() => {
+  voiceRecorder.value?.dispose()
+})
 </script>
+
 
 <style scoped>
 .home-container {
@@ -445,6 +717,95 @@ const handleSubmit = async () => {
 .form-section:hover {
   box-shadow: 0 8px 24px rgba(102, 126, 234, 0.15);
   transform: translateY(-2px);
+}
+
+/* 语音输入区域 */
+.voice-section {
+  background: linear-gradient(135deg, #fef9ff 0%, #ffffff 100%);
+  border: 1px dashed #d5c4ff;
+}
+
+.voice-hint {
+  margin-bottom: 16px;
+  color: #5c5c66;
+  font-size: 15px;
+}
+
+.voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.voice-alert {
+  margin-top: 12px;
+}
+
+.voice-status {
+  margin-top: 12px;
+}
+
+.voice-result-card {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #ebe4ff;
+  background: #fff;
+}
+
+.voice-transcript {
+  margin-bottom: 12px;
+  font-size: 15px;
+  color: #333;
+  line-height: 1.6;
+}
+
+.missing-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: #d46b08;
+}
+
+.voice-suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.voice-suggestion-item {
+  padding: 12px;
+  border-radius: 10px;
+  background: #f7f4ff;
+}
+
+.voice-suggestion-item .label {
+  display: block;
+  font-size: 13px;
+  color: #777;
+  margin-bottom: 4px;
+}
+
+.voice-suggestion-item .value {
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+}
+
+.voice-preferences .label {
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.preference-tags-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .section-header {

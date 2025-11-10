@@ -93,3 +93,26 @@ export interface TripPlanResponse {
   data?: TripPlan
 }
 
+export interface VoiceFormSuggestion {
+  city?: string | null
+  start_date?: string | null
+  end_date?: string | null
+  travel_days?: number | null
+  transportation?: string | null
+  accommodation?: string | null
+  preferences?: string[]
+  free_text_input?: string | null
+}
+
+export interface VoiceTranscriptionResponse {
+  success: boolean
+  message: string
+  transcript?: string
+  form: VoiceFormSuggestion
+  missing_fields: string[]
+}
+
+export interface VoicePlanResponse extends VoiceTranscriptionResponse {
+  data?: TripPlan
+}
+

@@ -11,6 +11,9 @@ pydantic-settings>=2.0.0
 httpx>=0.27.0
 aiohttp>=3.10.0
 
+# WebSocket客户端
+websockets>=12.0.0
+
 # 环境变量管理
 python-dotenv>=1.0.0
 
