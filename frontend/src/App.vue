@@ -1,19 +1,31 @@
-<template>
+﻿<template>
   <div id="app">
     <a-layout class="app-layout">
       <a-layout-header class="app-header">
-        <div class="brand">
-          <div class="logo">✈️</div>
-          <div>
-            <div class="title">AiTravelPlanner 智能旅行助手</div>
-            <div class="subtitle">语音驱动 · AI 规划 · 悦享旅程</div>
+        <div class="header-inner">
+          <div class="brand-block">
+            <div class="logo">✈️</div>
+            <div class="brand-text">
+              <div class="title">AiTravelPlanner 智能旅行助手</div>
+              <div class="subtitle">语音驱动 · AI 规划 · 悦享旅程</div>
+            </div>
           </div>
-        </div>
-        <div v-if="sessionUser" class="user-actions">
-          <span class="welcome">欢迎，{{ sessionUser.name || sessionUser.email }}</span>
-          <a-button size="small" type="primary" danger @click="confirmLogout">
-            切换/注销
-          </a-button>
+          <div class="nav-block">
+            <button
+              v-for="item in navItems"
+              :key="item.path"
+              :class="['nav-link', { active: router.currentRoute.value.path === item.path }]"
+              @click="goTo(item.path)"
+            >
+              {{ item.label }}
+            </button>
+          </div>
+          <div v-if="sessionUser" class="actions-block">
+            <span class="welcome">欢迎，{{ sessionUser.name || sessionUser.email }}</span>
+            <a-button size="small" type="primary" danger @click="confirmLogout">
+              切换/注销
+            </a-button>
+          </div>
         </div>
       </a-layout-header>
       <a-layout-content class="app-content">
@@ -34,6 +46,10 @@ import { clearSession, getSessionUser } from '@/services/auth'
 
 const router = useRouter()
 const sessionUser = ref(getSessionUser())
+const navItems = [
+  { label: '语音规划', path: '/' },
+  { label: '行程结果', path: '/result' }
+]
 
 const refreshSession = () => {
   sessionUser.value = getSessionUser()
@@ -61,12 +77,16 @@ const confirmLogout = () => {
     }
   })
 }
+
+const goTo = (path: string) => {
+  if (router.currentRoute.value.path === path) return
+  router.push(path)
+}
 </script>
 
 <style scoped>
 #app {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
 }
 
 .app-layout {
@@ -75,17 +95,33 @@ const confirmLogout = () => {
 
 .app-header {
   background: #0f172a;
-  padding: 0 40px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  padding: 0;
 }
 
-.brand {
+.header-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 10px 24px;
+  min-height: 72px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   color: #e2e8f0;
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .logo {
@@ -102,6 +138,7 @@ const confirmLogout = () => {
 .title {
   font-size: 22px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .subtitle {
@@ -109,11 +146,39 @@ const confirmLogout = () => {
   color: #94a3b8;
 }
 
-.user-actions {
+.nav-block {
+  flex: 1 1 320px;
+  min-width: 240px;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.nav-link {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #cbd5f5;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  border-color: #fff;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.actions-block {
   display: flex;
   align-items: center;
   gap: 12px;
   color: #cbd5f5;
+  flex: 0 0 auto;
 }
 
 .welcome {
@@ -121,7 +186,7 @@ const confirmLogout = () => {
 }
 
 .app-content {
-  padding: 24px;
+  padding: 12px 20px 24px;
   background: #f5f7fb;
   min-height: calc(100vh - 128px);
 }
@@ -131,4 +196,21 @@ const confirmLogout = () => {
   color: #64748b;
   font-size: 14px;
 }
+
+@media (max-width: 1024px) {
+  .header-inner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .brand-block,
+  .nav-block,
+  .actions-block {
+    justify-content: center;
+  }
+  .nav-block {
+    order: 3;
+  }
+}
 </style>
+
+
