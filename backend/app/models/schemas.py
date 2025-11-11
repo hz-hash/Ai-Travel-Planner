@@ -188,6 +188,11 @@ class VoicePlanResponse(BaseModel):
     data: Optional[TripPlan] = Field(default=None, description="旅行计划")
 
 
+class VoiceTextPlanRequest(BaseModel):
+    """语音文本生成行程请求"""
+    transcript: str = Field(..., min_length=1, description="用户确认后的语音文本")
+
+
 class POIInfo(BaseModel):
     """POI信息"""
     id: str = Field(..., description="POI ID")

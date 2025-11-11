@@ -1,16 +1,16 @@
-﻿<template>
+<template>
   <div id="app">
     <a-layout class="app-layout">
       <a-layout-header class="app-header">
         <div class="header-inner">
-          <div class="brand-block">
+          <div class="brand">
             <div class="logo">✈️</div>
-            <div class="brand-text">
+            <div>
               <div class="title">AiTravelPlanner 智能旅行助手</div>
               <div class="subtitle">语音驱动 · AI 规划 · 悦享旅程</div>
             </div>
           </div>
-          <div class="nav-block">
+          <div class="nav-links">
             <button
               v-for="item in navItems"
               :key="item.path"
@@ -20,7 +20,7 @@
               {{ item.label }}
             </button>
           </div>
-          <div v-if="sessionUser" class="actions-block">
+          <div v-if="sessionUser" class="user-actions">
             <span class="welcome">欢迎，{{ sessionUser.name || sessionUser.email }}</span>
             <a-button size="small" type="primary" danger @click="confirmLogout">
               切换/注销
@@ -32,10 +32,10 @@
         <router-view />
       </a-layout-content>
       <a-layout-footer class="app-footer">
-        AiTravelPlanner 智能旅行助手 ©2025 基于 AiTravelPlanner 框架
+        AiTravelPlanner 智能旅行助手
       </a-layout-footer>
     </a-layout>
-  </div>
+  </div>  
 </template>
 
 <script setup lang="ts">
@@ -86,7 +86,8 @@ const goTo = (path: string) => {
 
 <style scoped>
 #app {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
 }
 
 .app-layout {
@@ -105,23 +106,15 @@ const goTo = (path: string) => {
   min-height: 72px;
   display: flex;
   align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
+  gap: 24px;
 }
 
-.brand-block {
+.brand {
   display: flex;
   align-items: center;
   gap: 12px;
   color: #e2e8f0;
-  flex: 1 1 260px;
-  min-width: 220px;
-}
-
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-shrink: 0;
 }
 
 .logo {
@@ -138,7 +131,6 @@ const goTo = (path: string) => {
 .title {
   font-size: 22px;
   font-weight: 700;
-  white-space: nowrap;
 }
 
 .subtitle {
@@ -146,18 +138,16 @@ const goTo = (path: string) => {
   color: #94a3b8;
 }
 
-.nav-block {
-  flex: 1 1 320px;
-  min-width: 240px;
+.nav-links {
   display: flex;
+  gap: 10px;
+  flex: 1 1 auto;
   justify-content: center;
-  gap: 12px;
-  flex-wrap: wrap;
 }
 
 .nav-link {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: transparent;
+  border: 1px solid transparent;
   color: #cbd5f5;
   padding: 6px 14px;
   border-radius: 999px;
@@ -168,17 +158,17 @@ const goTo = (path: string) => {
 
 .nav-link:hover,
 .nav-link.active {
-  border-color: #fff;
+  border-color: #94a3b8;
   color: #fff;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(148, 163, 184, 0.16);
 }
 
-.actions-block {
+.user-actions {
   display: flex;
   align-items: center;
   gap: 12px;
   color: #cbd5f5;
-  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .welcome {
@@ -196,21 +186,4 @@ const goTo = (path: string) => {
   color: #64748b;
   font-size: 14px;
 }
-
-@media (max-width: 1024px) {
-  .header-inner {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .brand-block,
-  .nav-block,
-  .actions-block {
-    justify-content: center;
-  }
-  .nav-block {
-    order: 3;
-  }
-}
 </style>
-
-

@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import hmac
 import io
 import json
-import math
+import os
+import tempfile
 import wave
-from datetime import datetime
-from email.utils import formatdate
+from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
-from urllib.parse import urlencode
 
-import websockets
 from dateutil import parser as date_parser
+
+try:
+    import dashscope
+    from dashscope import MultiModalConversation
+except ImportError:  # pragma: no cover
+    dashscope = None
+    MultiModalConversation = None
 
 from ..agents.trip_planner_agent import get_trip_planner_agent
 from ..config import get_settings
@@ -59,13 +61,17 @@ def _format_missing_fields(form: VoiceFormSuggestion, require_travel_days: bool 
     missing = []
     if not form.city:
         missing.append("city")
-    if not form.start_date:
+    has_start = bool(form.start_date)
+    if not has_start:
         missing.append("start_date")
-    if not form.end_date:
+
+    has_end = bool(form.end_date)
+    has_travel_days = _valid_travel_days(form.travel_days)
+    if not has_end and not has_travel_days:
         missing.append("end_date")
     if require_travel_days:
-        has_days = bool(form.travel_days) or (form.start_date and form.end_date)
-        if not has_days:
+        has_duration_hint = has_travel_days or (has_start and has_end)
+        if not has_duration_hint:
             missing.append("travel_days")
     return missing
 
@@ -109,46 +115,136 @@ def _calc_days(start: str, end: str) -> Optional[int]:
         return None
 
 
-class VoiceService:
-    """科大讯飞语音识别与语音驱动行程规划"""
+def _valid_travel_days(value: Optional[int]) -> bool:
+    return isinstance(value, int) and value > 0
 
-    FRAME_SIZE = 1280  # 每帧字节数
-    FRAME_INTERVAL = 0.04  # 40ms
+
+def _infer_end_date(start_iso: Optional[str], travel_days: Optional[int]) -> Optional[str]:
+    if not start_iso or not _valid_travel_days(travel_days):
+        return None
+    try:
+        start_dt = datetime.fromisoformat(start_iso).date()
+    except ValueError:
+        return None
+    offset = timedelta(days=travel_days - 1)
+    return (start_dt + offset).isoformat()
+
+
+class VoiceService:
+    """阿里云百炼语音识别与语音驱动行程规划"""
 
     def __init__(self):
         self.settings = get_settings()
         self.llm = get_llm()
 
-    def _ensure_credentials(self):
-        if not (
-            self.settings.iflytek_app_id
-            and self.settings.iflytek_api_key
-            and self.settings.iflytek_api_secret
-        ):
-            raise VoiceServiceError("未配置科大讯飞语音识别凭证")
+    def _resolve_bailian_config(self) -> dict:
+        api_key = os.getenv("BAILIAN_API_KEY") or self.settings.bailian_api_key
+        base_url = os.getenv("BAILIAN_BASE_URL") or self.settings.bailian_base_url
+        model = os.getenv("BAILIAN_MODEL") or self.settings.bailian_model
+        workspace = os.getenv("BAILIAN_WORKSPACE_ID") or self.settings.bailian_workspace_id
+        fmt = (os.getenv("BAILIAN_FORMAT") or self.settings.bailian_format or "wav").lower()
+        sample_rate_raw = os.getenv("BAILIAN_SAMPLE_RATE")
+        sample_rate = self.settings.bailian_sample_rate or 16000
+        if sample_rate_raw:
+            try:
+                sample_rate = int(sample_rate_raw)
+            except ValueError as exc:
+                raise VoiceServiceError("BAILIAN_SAMPLE_RATE必须是整数") from exc
+        language = os.getenv("BAILIAN_LANGUAGE") or getattr(self.settings, "bailian_language", "zh")
+        return {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "workspace": workspace,
+            "format": fmt,
+            "sample_rate": int(sample_rate),
+            "language": (language or "zh").strip() or "zh",
+        }
 
-    def _build_ws_url(self) -> str:
-        host = self.settings.iflytek_host or "iat-api.xfyun.cn"
-        path = self.settings.iflytek_path or "/v2/iat"
-        date_str = formatdate(timeval=None, usegmt=True)
-        signature_origin = f"host: {host}\ndate: {date_str}\nGET {path} HTTP/1.1"
-        signature_sha = base64.b64encode(
-            hmac.new(
-                self.settings.iflytek_api_secret.encode("utf-8"),
-                signature_origin.encode("utf-8"),
-                digestmod=hashlib.sha256,
-            ).digest()
-        ).decode("utf-8")
-        authorization_origin = (
-            f'api_key="{self.settings.iflytek_api_key}", algorithm="hmac-sha256", '
-            f'headers="host date request-line", signature="{signature_sha}"'
-        )
-        authorization = base64.b64encode(authorization_origin.encode("utf-8")).decode("utf-8")
-        query = urlencode({"authorization": authorization, "date": date_str, "host": host})
-        return f"wss://{host}{path}?{query}"
+    def _ensure_credentials(self) -> dict:
+        config = self._resolve_bailian_config()
+        if not config["api_key"]:
+            raise VoiceServiceError("未配置阿里云百炼API Key")
+        if not config["model"]:
+            raise VoiceServiceError("未配置阿里云百炼语音识别模型")
+        if not config["base_url"]:
+            raise VoiceServiceError("未配置阿里云百炼接口地址")
+        return config
 
     @staticmethod
-    def _pcm_from_wav(audio_bytes: bytes) -> bytes:
+    def _http_base_url(base_url: str) -> str:
+        base = base_url
+        if isinstance(base, dict):
+            base = base.get("base_url") or base.get("url")
+        if base is None:
+            base = ""
+        base = str(base).strip()
+        if not base:
+            base = "https://dashscope.aliyuncs.com/api/v1"
+        try:
+            if base.startswith("wss://"):
+                base = "https://" + base[len("wss://") :]
+            elif base.startswith("ws://"):
+                base = "http://" + base[len("ws://") :]
+        except AttributeError:
+            base = str(base)
+            if base.startswith("wss://"):
+                base = "https://" + base[len("wss://") :]
+            elif base.startswith("ws://"):
+                base = "http://" + base[len("ws://") :]
+        base = base.rstrip("/")
+        if base.endswith("/api-ws/v1/inference"):
+            base = base[: -len("/api-ws/v1/inference")] + "/api/v1"
+        return base
+
+    @staticmethod
+    def _ensure_dashscope_sdk():
+        if dashscope is None or MultiModalConversation is None:
+            raise VoiceServiceError("未安装dashscope依赖,请执行 pip install dashscope")
+
+    @staticmethod
+    def _build_dashscope_messages(audio_path: str) -> List[dict]:
+        system_prompt = "请将用户提供的音频准确转写为中文文本,保留目的地、日期和偏好等关键信息。"
+        return [
+            {"role": "system", "content": [{"text": system_prompt}]},
+            {"role": "user", "content": [{"audio": audio_path}]},
+        ]
+
+    @staticmethod
+    def _dump_audio_file(audio_bytes: bytes, audio_format: str) -> str:
+        fmt = (audio_format or "wav").lower()
+        suffix = f".{fmt}" if fmt in {"wav", "pcm", "mp3"} else ".tmp"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_file.write(audio_bytes)
+            return tmp_file.name
+
+    def _extract_dashscope_text(self, response) -> str:
+        status_code = getattr(response, "status_code", None)
+        if status_code and status_code != 200:
+            message = getattr(response, "message", "阿里云百炼接口调用失败")
+            raise VoiceServiceError(f"阿里云百炼返回错误[{status_code}]: {message}")
+
+        output = getattr(response, "output", None) or {}
+        choices = output.get("choices") or []
+        texts: List[str] = []
+        for choice in choices:
+            message = (choice or {}).get("message") or {}
+            for item in message.get("content") or []:
+                text = item.get("text")
+                if text:
+                    texts.append(text)
+
+        transcript = "".join(texts).strip()
+        if transcript:
+            return transcript
+
+        fallback_text = output.get("text")
+        if isinstance(fallback_text, str):
+            return fallback_text.strip()
+        return ""
+
+    @staticmethod
+    def _pcm_from_wav(audio_bytes: bytes, expected_rate: int = 16000) -> bytes:
         try:
             with wave.open(io.BytesIO(audio_bytes), "rb") as wav_reader:
                 channels = wav_reader.getnchannels()
@@ -158,8 +254,8 @@ class VoiceService:
                     raise VoiceServiceError("请提供单声道音频")
                 if sample_width != 2:
                     raise VoiceServiceError("请使用16位PCM编码音频")
-                if frame_rate != 16000:
-                    raise VoiceServiceError("请提供16k采样率音频")
+                if frame_rate != expected_rate:
+                    raise VoiceServiceError(f"请提供{expected_rate // 1000}k采样率音频")
                 frames = wav_reader.readframes(wav_reader.getnframes())
                 if not frames:
                     raise VoiceServiceError("音频数据为空")
@@ -168,95 +264,50 @@ class VoiceService:
             raise VoiceServiceError(f"音频格式解析失败: {exc}") from exc
 
     async def transcribe_audio(self, audio_bytes: bytes) -> str:
-        """上传音频到科大讯飞并返回识别文本"""
-        self._ensure_credentials()
-        pcm_data = self._pcm_from_wav(audio_bytes)
-        ws_url = self._build_ws_url()
-        transcript_parts: List[str] = []
+        """上传音频到阿里云百炼并返回识别文本"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._transcribe_sync, audio_bytes)
 
+    def _transcribe_sync(self, audio_bytes: bytes) -> str:
+        config = self._ensure_credentials()
+        self._ensure_dashscope_sdk()
+
+        sample_rate = config["sample_rate"]
+        pcm_frames = self._pcm_from_wav(audio_bytes, sample_rate)
+
+        audio_format = (config.get("format") or "wav").lower()
+        payload_bytes = pcm_frames if audio_format == "pcm" else audio_bytes
+
+        temp_audio_path = None
         try:
-            async with websockets.connect(
-                ws_url,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=10,
-                max_queue=4,
-                extra_headers={"origin": "https://www.xfyun.cn"},
-            ) as ws:
-                await self._stream_audio(ws, pcm_data)
-                async for message in ws:
-                    payload = json.loads(message)
-                    if payload.get("code", -1) != 0:
-                        raise VoiceServiceError(
-                            f"科大讯飞返回错误: {payload.get('message')} ({payload.get('code')})"
-                        )
-                    data = payload.get("data", {})
-                    result = data.get("result") or {}
-                    text = self._extract_text(result)
-                    if text:
-                        transcript_parts.append(text)
-                    if result.get("ls") or data.get("status") == 2:
-                        break
-        except VoiceServiceError:
-            raise
+            temp_audio_path = self._dump_audio_file(payload_bytes, audio_format)
+            dashscope.base_http_api_url = self._http_base_url(config["base_url"])
+
+            messages = self._build_dashscope_messages(temp_audio_path)
+            asr_options = {"enable_itn": True}
+            if config.get("language"):
+                asr_options["language"] = config["language"]
+
+            response = MultiModalConversation.call(
+                api_key=config["api_key"],
+                model=config["model"],
+                messages=messages,
+                result_format="message",
+                asr_options=asr_options,
+            )
         except Exception as exc:
             raise VoiceServiceError(f"语音识别请求失败: {exc}") from exc
+        finally:
+            if temp_audio_path and os.path.exists(temp_audio_path):
+                try:
+                    os.remove(temp_audio_path)
+                except OSError:
+                    pass
 
-        transcript = "".join(transcript_parts).strip()
+        transcript = self._extract_dashscope_text(response)
         if not transcript:
-            raise VoiceServiceError("未识别到有效语音内容,请重试")
+            raise VoiceServiceError("语音识别成功，但未检测到文字内容，请清晰描述后再试")
         return transcript
-
-    async def _stream_audio(self, ws, pcm_data: bytes):
-        total = len(pcm_data)
-        offset = 0
-        frame_count = math.ceil(total / self.FRAME_SIZE)
-
-        while offset < total:
-            chunk = pcm_data[offset : offset + self.FRAME_SIZE]
-            status = 0 if offset == 0 else 1
-            payload = {
-                "data": {
-                    "status": status,
-                    "format": "audio/L16;rate=16000",
-                    "encoding": "raw",
-                    "audio": base64.b64encode(chunk).decode("utf-8"),
-                }
-            }
-            if status == 0:
-                payload["common"] = {"app_id": self.settings.iflytek_app_id}
-                payload["business"] = {
-                    "language": self.settings.iflytek_language,
-                    "domain": self.settings.iflytek_domain,
-                    "accent": self.settings.iflytek_accent,
-                    "ptt": 1,  # 标点
-                }
-            await ws.send(json.dumps(payload))
-            offset += self.FRAME_SIZE
-            await asyncio.sleep(self.FRAME_INTERVAL)
-
-        await ws.send(
-            json.dumps(
-                {
-                    "data": {
-                        "status": 2,
-                        "format": "audio/L16;rate=16000",
-                        "encoding": "raw",
-                        "audio": "",
-                    }
-                }
-            )
-        )
-
-    @staticmethod
-    def _extract_text(result: dict) -> str:
-        words = []
-        for ws_node in result.get("ws", []):
-            for cw in ws_node.get("cw", []):
-                token = cw.get("w")
-                if token:
-                    words.append(token)
-        return "".join(words)
 
     async def parse_form_suggestion(self, transcript: str) -> VoiceFormSuggestion:
         if not transcript:
@@ -272,6 +323,14 @@ class VoiceService:
 
         form.start_date = _normalize_date(form.start_date)
         form.end_date = _normalize_date(form.end_date)
+        if not form.end_date:
+            inferred_end = _infer_end_date(form.start_date, form.travel_days)
+            if inferred_end:
+                form.end_date = inferred_end
+        if not _valid_travel_days(form.travel_days) and form.start_date and form.end_date:
+            inferred_days = _calc_days(form.start_date, form.end_date)
+            if inferred_days:
+                form.travel_days = inferred_days
         form.preferences = _normalize_preferences(form.preferences)
         return form
 
@@ -287,6 +346,15 @@ class VoiceService:
         data = _safe_json_loads(response_text)
         if not data:
             raise VoiceServiceError("LLM未返回有效JSON,请重试")
+
+        prefs = data.get("preferences")
+        if prefs is None:
+            data["preferences"] = []
+        elif isinstance(prefs, str):
+            data["preferences"] = [prefs]
+        elif not isinstance(prefs, list):
+            data["preferences"] = []
+
         return data
 
     def _build_trip_request(self, form: VoiceFormSuggestion) -> TripRequest:
@@ -295,15 +363,26 @@ class VoiceService:
             raise VoiceServiceError(f"缺少必要字段: {', '.join(missing)}")
 
         start = form.start_date or ""
-        end = form.end_date or ""
         start_iso = _normalize_date(start)
-        end_iso = _normalize_date(end)
-        if not start_iso or not end_iso:
+        if not start_iso:
             raise VoiceServiceError("无法解析语音中的日期,请补充后重试")
 
-        travel_days = form.travel_days or _calc_days(start_iso, end_iso)
+        end_iso = _normalize_date(form.end_date or "")
+        input_travel_days = form.travel_days if _valid_travel_days(form.travel_days) else None
+        if not end_iso:
+            inferred_end = _infer_end_date(start_iso, input_travel_days)
+            if inferred_end:
+                end_iso = inferred_end
+                if not form.end_date:
+                    form.end_date = inferred_end
+        if not end_iso:
+            raise VoiceServiceError("无法解析语音中的日期,请补充后重试")
+
+        travel_days = input_travel_days or _calc_days(start_iso, end_iso)
         if not travel_days:
             raise VoiceServiceError("无法确定旅行天数,请补充后重试")
+        if input_travel_days is None:
+            form.travel_days = travel_days
 
         transportation = form.transportation or "公共交通"
         accommodation = form.accommodation or "舒适型酒店"
@@ -335,6 +414,22 @@ class VoiceService:
         agent = get_trip_planner_agent()
         trip_plan: TripPlan = await loop.run_in_executor(None, agent.plan_trip, trip_request)
         return transcript, suggestion, trip_plan
+
+    async def plan_trip_from_transcript(self, transcript: str) -> Tuple[str, VoiceFormSuggestion, TripPlan]:
+        clean_text = (transcript or "").strip()
+        if not clean_text:
+            raise VoiceServiceError("请输入有效的语音文本")
+
+        suggestion = await self.parse_form_suggestion(clean_text)
+        missing = _format_missing_fields(suggestion, require_travel_days=True)
+        if missing:
+            raise VoiceServiceError(f"语音信息不完整,缺少: {', '.join(missing)}")
+
+        trip_request = self._build_trip_request(suggestion)
+        loop = asyncio.get_running_loop()
+        agent = get_trip_planner_agent()
+        trip_plan: TripPlan = await loop.run_in_executor(None, agent.plan_trip, trip_request)
+        return clean_text, suggestion, trip_plan
 
     def get_missing_fields(self, suggestion: VoiceFormSuggestion, require_travel_days: bool = False) -> List[str]:
         return _format_missing_fields(suggestion, require_travel_days)

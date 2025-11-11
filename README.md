@@ -9,7 +9,6 @@
 - 🧠 **智能工具调用**: Agent自动调用高德地图MCP工具,获取实时POI、路线和天气信息
 - 🎨 **现代化前端**: Vue3 + TypeScript + Vite,响应式设计,流畅的用户体验
 - 📱 **完整功能**: 包含住宿、交通、餐饮和景点游览时间推荐
-- 🎙️ **语音输入**: 集成科大讯飞语音听写,一键录音即可自动填表或直接生成行程
 
 ## 🏗️ 技术栈
 
@@ -67,7 +66,6 @@ ai-travel-planner/
 - Node.js 16+
 - 高德地图API密钥 (Web服务API)
 - LLM API密钥 (OpenAI/DeepSeek等)
-- 科大讯飞开放平台语音听写 AppID / API Key / API Secret
 
 ### 后端安装
 
@@ -121,30 +119,25 @@ echo "VITE_AMAP_WEB_KEY=your_amap_web_key" > .env
 npm run dev
 ```
 
-5. 打开浏览器访问 `http://localhost:5173/auth` 体验登录/注册,成功后会跳转到主系统
+5. 打开浏览器访问 `http://localhost:5173`
 
-### 科大讯飞语音配置
+### 阿里云百炼语音配置
 
-1. 在[科大讯飞开放平台](https://www.xfyun.cn/)启用“语音听写 WebAPI (v2)”能力,获取 `AppID / APIKey / APISecret`。
-2. 编辑 `backend/.env`, 增加以下配置:
+1. 在[阿里云百炼控制台](https://bailian.console.aliyun.com/)开通语音识别(ASR)能力,获取 DASHScope API Key。北京地域默认 HTTP 接口为 `https://dashscope.aliyuncs.com/api/v1`, 若使用新加坡地域请改为 `https://dashscope-intl.aliyuncs.com/api/v1`。
+2. 编辑 `backend/.env`, 增加/确认以下配置:
    ```ini
-   IFLYTEK_APP_ID=your_app_id
-   IFLYTEK_API_KEY=your_api_key
-   IFLYTEK_API_SECRET=your_api_secret
-   IFLYTEK_LANGUAGE=zh_cn
-   IFLYTEK_DOMAIN=iat
-   IFLYTEK_ACCENT=mandarin
+   BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/api/v1
+   BAILIAN_MODEL=paraformer-realtime-v2
+   BAILIAN_API_KEY=your_bailian_api_key
+   BAILIAN_WORKSPACE_ID=
+   BAILIAN_FORMAT=wav
+   BAILIAN_SAMPLE_RATE=16000
+   BAILIAN_LANGUAGE=zh
    ```
-3. 重新执行 `pip install -r backend/requirements.txt`, 确认新引入的 `websockets` 等依赖安装完成。
-4. 前端已内置 Web Audio 录音与 16k PCM 转码逻辑,直接使用首页的“语音快速输入”按钮即可触发识别与自动填表。
+3. 重新执行 `pip install -r backend/requirements.txt` 确认 `dashscope` 依赖已安装。
+4. 前端仍会上传 16k PCM 单声道 WAV 音频,后端会调用 DashScope HTTP API 转写文本并进入自动填表/行程生成流程。
 
 ## 📝 使用指南
-
-### 登录 / 注册
-
-1. 默认体验账号: `demo@aitrip.com / demo123`
-2. 或在登录页切换到“注册”,填写昵称+邮箱+密码即可生成本地账号(数据暂存于浏览器 localStorage)
-3. 登录成功后自动跳转至主控台,即可像以往一样填写行程信息
 
 1. 在首页填写旅行信息:
    - 目的地城市
@@ -167,13 +160,6 @@ npm run dev
    - 交通路线规划
    - 天气预报
    - 餐饮推荐
-
-### 🎙️ 语音输入玩法
-
-1. 点击首页的“语音快速输入”按钮,授予浏览器麦克风权限并描述: 目的地、出行日期/天数、预算、同行人数、旅行偏好等内容。
-2. 松开录音后,系统会调用科大讯飞语音听写接口获取文本,并利用 LLM 抽取表单字段,自动标注缺失项。
-3. 可选择“使用语音填充表单”快速带入识别结果,也可以直接点击“语音直接生成行程”一步到位。
-4. 所有语音表单都会保存原文本,便于用户二次编辑或加入额外需求。
 
 ## 🔧 核心实现
 
@@ -220,25 +206,8 @@ Agent可以自动调用以下高德地图MCP工具:
 - `GET /api/map/poi` - 搜索POI
 - `GET /api/map/weather` - 查询天气
 - `POST /api/map/route` - 规划路线
-- `POST /api/voice/transcribe` - 上传语音并返回识别文本+表单建议
-- `POST /api/voice/plan` - 上传语音并直接生成完整旅行计划
 
-## 🤝 贡献指南
 
-欢迎提交Pull Request或Issue!
 
-## 📜 开源协议
 
-CC BY-NC-SA 4.0
-
-## 🙏 致谢
-
-- [AiTravelPlanner](https://github.com/datawhalechina/Hello-Agents) - 智能体教程
-- [AiTravelPlanner框架](https://github.com/jjyaoao/AiTravelPlanner) - 智能体框架
-- [高德地图开放平台](https://lbs.amap.com/) - 地图服务
-- [amap-mcp-server](https://github.com/sugarforever/amap-mcp-server) - 高德地图MCP服务器
-
----
-
-**AiTravelPlanner智能旅行助手** - 让旅行计划变得简单而智能 🌈
 

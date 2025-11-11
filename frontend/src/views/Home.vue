@@ -31,31 +31,20 @@
             type="primary"
             size="large"
             :danger="voiceState.recording"
-            :loading="voiceState.recording"
-            @click="toggleVoiceRecording"
+            :loading="voiceState.uploading || voiceState.planning"
+            :disabled="voiceState.uploading || voiceState.planning || !voiceState.supported"
+            @mousedown.prevent="handleVoicePressStart"
+            @mouseup="handleVoicePressEnd"
+            @mouseleave="handleVoicePressCancel"
+            @touchstart.prevent="handleVoicePressStart"
+            @touchend="handleVoicePressEnd"
+            @touchcancel="handleVoicePressCancel"
           >
             <template #icon>
               <span v-if="voiceState.recording">⏹</span>
               <span v-else>🎙️</span>
             </template>
-            {{ voiceState.recording ? '停止录音' : '开始语音输入' }}
-          </a-button>
-          <a-button
-            size="large"
-            :disabled="!voiceState.suggestion || voiceState.uploading"
-            @click="applyVoiceSuggestion"
-          >
-            <template #icon>🪄</template>
-            使用语音填充表单
-          </a-button>
-          <a-button
-            size="large"
-            type="dashed"
-            :disabled="!canGenerateFromVoice || voiceState.planning"
-            @click="generatePlanFromVoice"
-          >
-            <template #icon>⚡</template>
-            语音直接生成行程
+            {{ voiceState.recording ? '松开结束录音' : '按住开始语音输入' }}
           </a-button>
         </div>
 
@@ -76,15 +65,46 @@
           @close="voiceState.error = ''"
         />
 
-        <div class="voice-status" v-if="voiceState.uploading || voiceState.planning">
-          <a-spin
-            :tip="voiceState.uploading ? '语音识别中...' : 'AI 正在根据语音生成行程...'"
-          />
+        <div class="voice-status" v-if="voiceState.uploading">
+          <a-spin tip="语音识别中..." />
+        </div>
+        <div class="voice-progress" v-else-if="voiceState.planning">
+          <div class="loading-container">
+            <a-progress
+              :percent="voiceProgress"
+              status="active"
+              :stroke-color="{
+                '0%': '#667eea',
+                '100%': '#764ba2',
+              }"
+              :stroke-width="10"
+            />
+            <p class="loading-status">
+              {{ voiceProgressStatus || 'AI 正在根据语音生成行程...' }}
+            </p>
+          </div>
         </div>
 
         <div v-if="voiceState.transcript" class="voice-result-card">
           <h4>识别文本</h4>
-          <p class="voice-transcript">{{ voiceState.transcript }}</p>
+          <a-textarea
+            v-model:value="voiceState.reviewText"
+            :auto-size="{ minRows: 3, maxRows: 6 }"
+            placeholder="请确认或修改语音识别内容"
+            class="voice-textarea"
+          />
+          <div class="voice-result-actions">
+            <a-button
+              type="primary"
+              size="large"
+              :loading="voiceState.planning"
+              :disabled="!voiceState.reviewText.trim() || voiceState.uploading || voiceState.planning"
+              @click="confirmVoiceTranscript"
+            >
+              <template #icon>✅</template>
+              确认文字并生成行程
+            </a-button>
+          </div>
 
           <div class="missing-fields" v-if="voiceState.missing.length">
             <span>仍需补充:</span>
@@ -334,11 +354,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, computed, onBeforeUnmount } from 'vue'
+import { ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import dayjs, { type Dayjs } from 'dayjs'
-import { generateTripPlan, planTripByVoice, transcribeVoiceInput } from '@/services/api'
+import { generateTripPlan, planTripByVoiceText, transcribeVoiceInput } from '@/services/api'
 import { VoiceRecorder } from '@/services/voiceRecorder'
 import type { TripFormData, VoiceFormSuggestion } from '@/types'
 
@@ -346,12 +366,13 @@ const router = useRouter()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
+const voiceProgress = ref(0)
+const voiceProgressStatus = ref('')
 
 const defaultVoiceHint =
-  '点击开始语音输入,描述目的地、日期、预算、同行人数与偏好,系统会自动填表并生成行程'
+  '按住“语音输入”按钮开始说话,松开后系统会自动识别目的地、日期、预算与偏好'
 
 const voiceRecorder = ref<VoiceRecorder | null>(null)
-const lastVoiceBlob = ref<Blob | null>(null)
 const voiceState = reactive({
   supported: typeof window !== 'undefined' && !!navigator?.mediaDevices,
   recording: false,
@@ -361,12 +382,9 @@ const voiceState = reactive({
   statusText: defaultVoiceHint,
   error: '',
   missing: [] as string[],
-  suggestion: null as VoiceFormSuggestion | null
+  suggestion: null as VoiceFormSuggestion | null,
+  reviewText: ''
 })
-
-const canGenerateFromVoice = computed(
-  () => !!lastVoiceBlob.value && !voiceState.recording && !voiceState.uploading && voiceState.supported
-)
 
 type TripFormState = Omit<TripFormData, 'start_date' | 'end_date'> & {
   start_date: Dayjs | null
@@ -400,16 +418,54 @@ watch([() => formData.start_date, () => formData.end_date], ([start, end]) => {
   }
 })
 
-const toggleVoiceRecording = async () => {
-  if (!voiceState.supported) {
-    message.error('当前浏览器不支持语音录制,请改用最新版 Chrome/Edge')
-    return
+let voiceProgressInterval: ReturnType<typeof setInterval> | null = null
+let voiceProgressResetTimer: ReturnType<typeof setTimeout> | null = null
+
+const startVoiceProgress = () => {
+  if (voiceProgressInterval) {
+    clearInterval(voiceProgressInterval)
+    voiceProgressInterval = null
   }
-  if (voiceState.recording) {
-    await finishVoiceRecording()
-  } else {
-    await startVoiceRecording()
+  if (voiceProgressResetTimer) {
+    clearTimeout(voiceProgressResetTimer)
+    voiceProgressResetTimer = null
   }
+  voiceProgress.value = 0
+  voiceProgressStatus.value = '正在初始化...'
+  voiceProgressInterval = setInterval(() => {
+    if (voiceProgress.value < 90) {
+      voiceProgress.value += 10
+      if (voiceProgress.value <= 30) {
+        voiceProgressStatus.value = '📥 正在整理语音内容...'
+      } else if (voiceProgress.value <= 60) {
+        voiceProgressStatus.value = '🧠 AI 正在理解你的出行偏好...'
+      } else {
+        voiceProgressStatus.value = '🗺️ 正在生成行程方案...'
+      }
+    }
+  }, 500)
+}
+
+const stopVoiceProgress = (completed = false, message?: string) => {
+  if (voiceProgressInterval) {
+    clearInterval(voiceProgressInterval)
+    voiceProgressInterval = null
+  }
+  if (voiceProgressResetTimer) {
+    clearTimeout(voiceProgressResetTimer)
+    voiceProgressResetTimer = null
+  }
+  if (completed) {
+    voiceProgress.value = 100
+    voiceProgressStatus.value = '✅ 完成!'
+  } else if (message) {
+    voiceProgressStatus.value = message
+  }
+  const resetDelay = completed || message ? 1200 : 0
+  voiceProgressResetTimer = setTimeout(() => {
+    voiceProgress.value = 0
+    voiceProgressStatus.value = ''
+  }, resetDelay)
 }
 
 const startVoiceRecording = async () => {
@@ -430,20 +486,48 @@ const startVoiceRecording = async () => {
 }
 
 const finishVoiceRecording = async () => {
-  if (!voiceRecorder.value) return
+  const recorder = voiceRecorder.value
+  if (!recorder) return
+  voiceRecorder.value = null
   try {
     voiceState.statusText = '正在封装音频...'
-    const blob = await voiceRecorder.value.stop()
-    lastVoiceBlob.value = blob
+    const blob = await recorder.stop()
     await analyzeVoiceBlob(blob)
   } catch (error: any) {
     voiceState.error = error?.message || '处理录音失败,请重试'
     message.error(voiceState.error)
   } finally {
     voiceState.recording = false
-    voiceRecorder.value?.dispose()
-    voiceRecorder.value = null
+    recorder.dispose()
   }
+}
+
+const handleVoicePressStart = async (event?: Event) => {
+  event?.preventDefault()
+  if (!voiceState.supported) {
+    message.error('当前浏览器不支持语音录制,请改用最新版 Chrome/Edge')
+    return
+  }
+  if (voiceState.recording || voiceState.uploading || voiceState.planning) {
+    return
+  }
+  await startVoiceRecording()
+}
+
+const handleVoicePressEnd = async (event?: Event) => {
+  event?.preventDefault()
+  if (!voiceState.recording) {
+    return
+  }
+  await finishVoiceRecording()
+}
+
+const handleVoicePressCancel = async (event?: Event) => {
+  event?.preventDefault()
+  if (!voiceState.recording) {
+    return
+  }
+  await finishVoiceRecording()
 }
 
 const analyzeVoiceBlob = async (blob: Blob) => {
@@ -452,12 +536,13 @@ const analyzeVoiceBlob = async (blob: Blob) => {
   try {
     const result = await transcribeVoiceInput(blob)
     voiceState.transcript = result.transcript || ''
+    voiceState.reviewText = voiceState.transcript
     voiceState.suggestion = result.form
     voiceState.missing = result.missing_fields || []
     voiceState.statusText =
       voiceState.missing.length > 0
-        ? '语音识别成功,请补充缺失字段后提交'
-        : '语音识别成功,可一键填充表单'
+        ? '语音识别成功,请确认文本并补充缺失字段后生成行程'
+        : '语音识别成功,请确认文本后生成行程'
     message.success(result.message || '语音解析成功')
   } catch (error: any) {
     voiceState.error = error?.message || '语音解析失败,请稍后重试'
@@ -468,52 +553,42 @@ const analyzeVoiceBlob = async (blob: Blob) => {
   }
 }
 
-const applyVoiceSuggestion = () => {
-  if (!voiceState.suggestion) {
-    message.warning('请先完成语音识别')
-    return
-  }
-  const suggestion = voiceState.suggestion
-  if (suggestion.city) formData.city = suggestion.city
-  if (suggestion.start_date) formData.start_date = dayjs(suggestion.start_date)
-  if (suggestion.end_date) formData.end_date = dayjs(suggestion.end_date)
-  if (suggestion.travel_days) formData.travel_days = suggestion.travel_days
-  if (suggestion.transportation) formData.transportation = suggestion.transportation
-  if (suggestion.accommodation) formData.accommodation = suggestion.accommodation
-  if (suggestion.preferences && suggestion.preferences.length > 0) {
-    formData.preferences = [...suggestion.preferences]
-  }
-  if (suggestion.free_text_input) {
-    formData.free_text_input = suggestion.free_text_input
-  }
-  message.success('已根据语音结果填充表单,可继续微调后生成行程')
-}
-
-const generatePlanFromVoice = async () => {
-  if (!lastVoiceBlob.value) {
-    message.warning('请先完成语音录制并识别')
+const confirmVoiceTranscript = async () => {
+  const text = voiceState.reviewText.trim()
+  if (!text) {
+    message.warning('请先确认或编辑语音文本')
     return
   }
   voiceState.planning = true
   voiceState.error = ''
-  voiceState.statusText = '🤖 AI 正在根据语音自动生成行程...'
+  voiceState.statusText = '🤖 AI 正在根据文本生成行程...'
+  startVoiceProgress()
+  let progressHandled = false
   try {
-    const result = await planTripByVoice(lastVoiceBlob.value)
+    const result = await planTripByVoiceText(text)
     if (result.success && result.data) {
-      voiceState.transcript = result.transcript || voiceState.transcript
+      voiceState.transcript = result.transcript || text
+      voiceState.reviewText = voiceState.transcript
       voiceState.suggestion = result.form
       voiceState.missing = result.missing_fields || []
       sessionStorage.setItem('tripPlan', JSON.stringify(result.data))
+      stopVoiceProgress(true)
+      progressHandled = true
       message.success('语音行程生成成功!')
       router.push('/result')
     } else {
-      throw new Error(result.message || '语音行程生成失败')
+      throw new Error(result.message || '语音文本生成行程失败')
     }
   } catch (error: any) {
-    voiceState.error = error?.message || '语音行程生成失败,请补充信息后重试'
+    voiceState.error = error?.message || '语音文本生成行程失败,请检查文本后重试'
+    stopVoiceProgress(false, voiceState.error)
+    progressHandled = true
     message.error(voiceState.error)
   } finally {
     voiceState.planning = false
+    if (!progressHandled) {
+      stopVoiceProgress()
+    }
     voiceState.statusText = defaultVoiceHint
   }
 }
@@ -586,6 +661,12 @@ const handleSubmit = async () => {
 
 onBeforeUnmount(() => {
   voiceRecorder.value?.dispose()
+  if (voiceProgressInterval) {
+    clearInterval(voiceProgressInterval)
+  }
+  if (voiceProgressResetTimer) {
+    clearTimeout(voiceProgressResetTimer)
+  }
 })
 </script>
 
@@ -671,7 +752,8 @@ onBeforeUnmount(() => {
 }
 
 .voice-alert,
-.voice-status {
+.voice-status,
+.voice-progress {
   margin-top: 8px;
 }
 
@@ -680,6 +762,22 @@ onBeforeUnmount(() => {
   border-radius: 14px;
   padding: 12px;
   background: #f8f9ff;
+}
+
+.voice-textarea {
+  margin-top: 8px;
+}
+
+.voice-textarea :deep(.ant-input) {
+  border-radius: 12px;
+  border: 1px solid #dfe3f0;
+  box-shadow: none;
+}
+
+.voice-result-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .form-card {

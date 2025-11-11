@@ -10,7 +10,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000, // 2分钟超时
+  timeout: 240000, // 4分钟超时
   headers: {
     'Content-Type': 'application/json'
   }
@@ -97,6 +97,21 @@ export async function planTripByVoice(audioBlob: Blob): Promise<VoicePlanRespons
   } catch (error: any) {
     console.error('语音生成旅行计划失败:', error)
     throw new Error(error.response?.data?.detail || error.message || '语音生成旅行计划失败')
+  }
+}
+
+/**
+ * 语音文本确认后生成旅行计划
+ */
+export async function planTripByVoiceText(transcript: string): Promise<VoicePlanResponse> {
+  try {
+    const response = await apiClient.post<VoicePlanResponse>('/api/voice/plan-text', {
+      transcript
+    })
+    return response.data
+  } catch (error: any) {
+    console.error('语音文本生成旅行计划失败:', error)
+    throw new Error(error.response?.data?.detail || error.message || '语音文本生成旅行计划失败')
   }
 }
 

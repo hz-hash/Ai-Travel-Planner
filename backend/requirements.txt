@@ -17,6 +17,9 @@ websockets>=12.0.0
 # 环境变量管理
 python-dotenv>=1.0.0
 
+# DashScope SDK
+dashscope>=1.16.0
+
 # CORS支持
 python-multipart>=0.0.9
 

@@ -10,6 +10,11 @@ from dotenv import load_dotenv
 # 首先尝试加载当前目录的.env
 load_dotenv()
 
+# 再尝试加载 backend/.env(如果存在)
+backend_env = Path(__file__).resolve().parent.parent / ".env"
+if backend_env.exists():
+    load_dotenv(backend_env, override=False)
+
 # 然后尝试加载AiTravelPlanner的.env(如果存在)
 aitravelplanner_env = Path(__file__).parent.parent.parent.parent / "ai-travel-planner" / ".env"
 if aitravelplanner_env.exists():
@@ -43,15 +48,14 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4"
 
-    # 科大讯飞语音听写配置
-    iflytek_app_id: str = ""
-    iflytek_api_key: str = ""
-    iflytek_api_secret: str = ""
-    iflytek_host: str = "iat-api.xfyun.cn"
-    iflytek_path: str = "/v2/iat"
-    iflytek_language: str = "zh_cn"
-    iflytek_domain: str = "iat"
-    iflytek_accent: str = "mandarin"
+    # 阿里云百炼语音识别配置
+    bailian_api_key: str = ""
+    bailian_base_url: str = ""
+    bailian_model: str = ""
+    bailian_workspace_id: str = ""
+    bailian_format: str = "pcm"
+    bailian_sample_rate: int = 16000
+    bailian_language: str = "zh"
 
     # 日志配置
     log_level: str = "INFO"
@@ -89,8 +93,9 @@ def validate_config():
     if not llm_api_key:
         warnings.append("LLM_API_KEY或OPENAI_API_KEY未配置,LLM功能可能无法使用")
 
-    if not (settings.iflytek_app_id and settings.iflytek_api_key and settings.iflytek_api_secret):
-        warnings.append("IFLYTEK_APP_ID/API_KEY/API_SECRET未配置,语音输入功能不可用")
+    bailian_api_key = os.getenv("BAILIAN_API_KEY") or settings.bailian_api_key
+    if not bailian_api_key:
+        warnings.append("BAILIAN_API_KEY未配置,语音输入功能不可用")
 
     if errors:
         error_msg = "配置错误:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -120,7 +125,18 @@ def print_config():
     print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
     print(f"LLM Base URL: {llm_base_url}")
     print(f"LLM Model: {llm_model}")
-    has_voice = all([settings.iflytek_app_id, settings.iflytek_api_key, settings.iflytek_api_secret])
+
+    bailian_api_key = os.getenv("BAILIAN_API_KEY") or settings.bailian_api_key
+    bailian_base_url = os.getenv("BAILIAN_BASE_URL") or settings.bailian_base_url
+    bailian_model = os.getenv("BAILIAN_MODEL") or settings.bailian_model
+    bailian_workspace = os.getenv("BAILIAN_WORKSPACE_ID") or settings.bailian_workspace_id
+
+    has_voice = bool(bailian_api_key)
     print(f"语音识别: {'已启用' if has_voice else '未配置'}")
+    if has_voice:
+        print(f"  - 模型111: {bailian_model or '默认'}")
+        print(f"  - 服务: {bailian_base_url}")
+        if bailian_workspace:
+            print(f"  - 工作空间: {bailian_workspace}")
     print(f"日志级别: {settings.log_level}")
 

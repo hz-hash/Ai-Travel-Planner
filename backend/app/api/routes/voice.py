@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from ...models.schemas import VoicePlanResponse, VoiceTranscriptionResponse
+from ...models.schemas import VoicePlanResponse, VoiceTextPlanRequest, VoiceTranscriptionResponse
 from ...services.voice_service import VoiceServiceError, get_voice_service
 
 router = APIRouter(prefix="/voice", tags=["语音输入"])
@@ -51,6 +51,31 @@ async def plan_by_voice(audio: UploadFile = File(..., description="16k PCM WAV�
         return VoicePlanResponse(
             success=True,
             message="语音规划成功",
+            transcript=transcript,
+            form=suggestion,
+            missing_fields=[],
+            data=plan,
+        )
+    except VoiceServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/plan-text",
+    response_model=VoicePlanResponse,
+    summary="根据语音文本生成旅行计划",
+)
+async def plan_by_voice_text(payload: VoiceTextPlanRequest):
+    transcript = (payload.transcript or "").strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="请输入语音识别文本")
+
+    try:
+        voice_service = get_voice_service()
+        transcript, suggestion, plan = await voice_service.plan_trip_from_transcript(transcript)
+        return VoicePlanResponse(
+            success=True,
+            message="语音文本规划成功",
             transcript=transcript,
             form=suggestion,
             missing_fields=[],
