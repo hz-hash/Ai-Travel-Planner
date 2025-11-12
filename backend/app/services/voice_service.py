@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
-import tempfile
 import wave
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
@@ -203,20 +203,21 @@ class VoiceService:
             raise VoiceServiceError("未安装dashscope依赖,请执行 pip install dashscope")
 
     @staticmethod
-    def _build_dashscope_messages(audio_path: str) -> List[dict]:
-        system_prompt = "请将用户提供的音频准确转写为中文文本,保留目的地、日期和偏好等关键信息。"
-        return [
-            {"role": "system", "content": [{"text": system_prompt}]},
-            {"role": "user", "content": [{"audio": audio_path}]},
-        ]
+    def _build_dashscope_messages(
+        audio_base64: str,
+        audio_format: str,
+    ) -> List[dict]:
+        if not audio_base64:
+            raise VoiceServiceError("音频数据为空,无法发送至语音识别服务")
 
-    @staticmethod
-    def _dump_audio_file(audio_bytes: bytes, audio_format: str) -> str:
         fmt = (audio_format or "wav").lower()
-        suffix = f".{fmt}" if fmt in {"wav", "pcm", "mp3"} else ".tmp"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-            tmp_file.write(audio_bytes)
-            return tmp_file.name
+        mime_map = {"wav": "audio/wav", "pcm": "audio/pcm", "mp3": "audio/mpeg"}
+        mime = mime_map.get(fmt, f"audio/{fmt}")
+        audio_data_uri = f"data:{mime};base64,{audio_base64}"
+
+        return [
+            {"role": "user", "content": [{"audio": audio_data_uri}]},
+        ]
 
     def _extract_dashscope_text(self, response) -> str:
         status_code = getattr(response, "status_code", None)
@@ -277,13 +278,15 @@ class VoiceService:
 
         audio_format = (config.get("format") or "wav").lower()
         payload_bytes = pcm_frames if audio_format == "pcm" else audio_bytes
+        if not payload_bytes:
+            raise VoiceServiceError("音频数据为空,无法提交识别")
 
-        temp_audio_path = None
+        audio_base64 = base64.b64encode(payload_bytes).decode("utf-8")
+
         try:
-            temp_audio_path = self._dump_audio_file(payload_bytes, audio_format)
             dashscope.base_http_api_url = self._http_base_url(config["base_url"])
 
-            messages = self._build_dashscope_messages(temp_audio_path)
+            messages = self._build_dashscope_messages(audio_base64, audio_format)
             asr_options = {"enable_itn": True}
             if config.get("language"):
                 asr_options["language"] = config["language"]
@@ -297,12 +300,6 @@ class VoiceService:
             )
         except Exception as exc:
             raise VoiceServiceError(f"语音识别请求失败: {exc}") from exc
-        finally:
-            if temp_audio_path and os.path.exists(temp_audio_path):
-                try:
-                    os.remove(temp_audio_path)
-                except OSError:
-                    pass
 
         transcript = self._extract_dashscope_text(response)
         if not transcript:
