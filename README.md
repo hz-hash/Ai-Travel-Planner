@@ -121,7 +121,19 @@ npm run dev
 
 5. 打开浏览器访问 `http://localhost:5173`
 
-### 阿里云百炼语音配置
+### LLM/语音配置
+
+#### 通用 LLM
+后端通过 `ai-travel-planner-core` 读取标准环境变量,推荐在 `backend/.env` 中配置:
+```ini
+LLM_API_KEY=your_llm_api_key
+LLM_BASE_URL=https://api.openai.com/v1   # 或 DeepSeek/其他兼容接口
+LLM_MODEL_ID=gpt-4o-mini                 # 根据你的模型替换
+LLM_TIMEOUT=260                          # 可选
+```
+若采用 DeepSeek/自建推理,只需把 `LLM_BASE_URL` 和 `LLM_MODEL_ID` 改成对应值即可。
+
+#### 阿里云百炼语音配置
 
 1. 在[阿里云百炼控制台](https://bailian.console.aliyun.com/)开通语音识别(ASR)能力,获取 DASHScope API Key。北京地域默认 HTTP 接口为 `https://dashscope.aliyuncs.com/api/v1`, 若使用新加坡地域请改为 `https://dashscope-intl.aliyuncs.com/api/v1`。
 2. 编辑 `backend/.env`, 增加/确认以下配置:
@@ -136,6 +148,30 @@ npm run dev
    ```
 3. 重新执行 `pip install -r backend/requirements.txt` 确认 `dashscope` 依赖已安装。
 4. 前端仍会上传 16k PCM 单声道 WAV 音频,后端会调用 DashScope HTTP API 转写文本并进入自动填表/行程生成流程。
+
+## 🐳 Docker 部署
+
+项目根目录已提供精简多阶段 `Dockerfile`, 会自动：
+1. 使用 `node:20-alpine` 构建前端并生成 `frontend/dist`
+2. 基于 `python:3.11-slim` 安装后端依赖
+3. 将打包后的前端静态文件挂载到 FastAPI, 由同一容器对外提供 Web + API
+
+### 构建镜像
+```bash
+docker build -t ai-travel-planner .
+```
+
+### 运行容器
+```bash
+docker run --rm \
+  -p 8000:8000 \
+  --env-file backend/.env \
+  ai-travel-planner
+```
+- 如果你把 `.env` 放到其他位置,只需调整 `--env-file` 路径即可。
+- 容器启动后访问 `http://localhost:8000` 即可看到前端; API 仍然在 `/api/*` 路径下,健康检查为 `/health`。
+
+> **提示**: 构建时 `.dockerignore` 已排除 Git、node_modules、录屏等文件,以减小镜像体积。如果还需要挂载本地 MCP/模型资源,可通过 `-v` 额外挂载。
 
 ## 📝 使用指南
 

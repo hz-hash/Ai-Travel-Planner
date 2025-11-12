@@ -1,7 +1,11 @@
 """FastAPI主应用"""
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from ..config import get_settings, validate_config, print_config
 from .routes import trip, poi, map as map_routes, voice
 
@@ -31,6 +35,14 @@ app.include_router(trip.router, prefix="/api")
 app.include_router(poi.router, prefix="/api")
 app.include_router(map_routes.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
+
+# 鍚屾鍓嶇疆SPA
+_spa_mounted = False
+_default_frontend_path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+_configured_frontend_path = Path(os.getenv("FRONTEND_DIST", str(_default_frontend_path)))
+if _configured_frontend_path.exists():
+    app.mount("/", StaticFiles(directory=_configured_frontend_path, html=True), name="frontend")
+    _spa_mounted = True
 
 
 @app.on_event("startup")
@@ -66,17 +78,18 @@ async def shutdown_event():
     print("="*60 + "\n")
 
 
-@app.get("/")
-async def root():
-    """根路径"""
-    return {
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "status": "running",
-        "docs": "/docs",
-        "redoc": "/redoc"
-    }
+if not _spa_mounted:
 
+    @app.get("/")
+    async def root():
+        """根路径"""
+        return {
+            "name": settings.app_name,
+            "version": settings.app_version,
+            "status": "running",
+            "docs": "/docs",
+            "redoc": "/redoc"
+        }
 
 @app.get("/health")
 async def health():
