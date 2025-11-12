@@ -127,7 +127,7 @@ npm run dev
 2. 编辑 `backend/.env`, 增加/确认以下配置:
    ```ini
    BAILIAN_BASE_URL=https://dashscope.aliyuncs.com/api/v1
-   BAILIAN_MODEL=paraformer-realtime-v2
+   BAILIAN_MODEL=xxx
    BAILIAN_API_KEY=your_bailian_api_key
    BAILIAN_WORKSPACE_ID=
    BAILIAN_FORMAT=wav
